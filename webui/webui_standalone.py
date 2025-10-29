@@ -26,9 +26,27 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 import zipfile
 
+# .env 파일 자동 로드 (있으면)
+def load_env_file(env_file='.env'):
+    """Load environment variables from .env file if it exists"""
+    env_path = Path(env_file)
+    if env_path.exists():
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    # 환경 변수에 아직 없으면 설정
+                    if key.strip() not in os.environ:
+                        os.environ[key.strip()] = value.strip()
+
+# 현재 디렉토리와 상위 디렉토리에서 .env 파일 찾기
+load_env_file('.env')  # 현재 디렉토리
+load_env_file('../.env')  # 상위 디렉토리 (webui/ 폴더에서 실행 시)
+
 # 기본 설정
 DEFAULT_SERVER_URL = os.environ.get('DEEPSEEK_OCR_SERVER', 'http://localhost:8000')
-DEFAULT_PORT = 8080
+DEFAULT_PORT = int(os.environ.get('DEEPSEEK_OCR_PORT', '8080'))
 
 # FastAPI 앱 초기화
 app = FastAPI(

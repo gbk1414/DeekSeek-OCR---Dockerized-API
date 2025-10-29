@@ -1,0 +1,39 @@
+# Environment configuration files
+.env
+webui/.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output and temporary files
+outputs/
+ocr_results/
+*.zip
+*.tmp
+
+# Model files (large files should not be committed)
+models/
+
+# Docker volumes
+data/
