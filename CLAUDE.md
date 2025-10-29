@@ -127,11 +127,11 @@ Three ways to use remote server:
 **1. Web UI (Recommended for most users)**:
 ```bash
 # Run standalone Web UI on local PC
-python webui_standalone.py --server https://your-server.com
+python webui/webui_standalone.py --server https://your-server.com
 
 # Browser opens automatically at http://localhost:8080
 # Drag & drop files → Process → Download ZIP
-# See WEBUI_STANDALONE_GUIDE.md
+# See webui/WEBUI_STANDALONE_GUIDE.md
 ```
 
 **2. Command Line Client (For automation)**:
@@ -382,7 +382,7 @@ python pdf_to_markdown_processor.py
 ├── docker-compose.yml               # Service configuration
 ├── build.bat                        # Windows build script
 ├── REMOTE_SERVER_GUIDE.md           # Remote server setup guide
-├── WEBUI_STANDALONE_GUIDE.md        # Web UI standalone usage guide
+├── webui/WEBUI_STANDALONE_GUIDE.md        # Web UI standalone usage guide
 ├── data/                            # PDF input/output directory
 │   └── images/                      # Extracted images (enhanced processors)
 └── models/                          # Model weights (mounted as volume)
