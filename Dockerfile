@@ -22,8 +22,9 @@ COPY custom_run_dpsk_ocr_pdf.py ./DeepSeek-OCR-vllm/run_dpsk_ocr_pdf.py
 COPY custom_run_dpsk_ocr_image.py ./DeepSeek-OCR-vllm/run_dpsk_ocr_image.py
 COPY custom_run_dpsk_ocr_eval_batch.py ./DeepSeek-OCR-vllm/run_dpsk_ocr_eval_batch.py
 
-# Copy the startup script
+# Copy the startup scripts
 COPY start_server.py .
+COPY webui.py .
 
 # Copy requirements file and install additional dependencies
 COPY DeepSeek-OCR/requirements.txt .
@@ -53,16 +54,22 @@ RUN pip install --no-cache-dir tokenizers==0.13.3 || echo "Using existing tokeni
 # Add the DeepSeek-OCR directory to PYTHONPATH
 ENV PYTHONPATH="/app/DeepSeek-OCR-vllm:${PYTHONPATH}"
 
-# Create directories for outputs
-RUN mkdir -p /app/outputs
+# Create directories for outputs and web UI
+RUN mkdir -p /app/outputs /app/webui_uploads /app/webui_results
 
 # Make the scripts executable
-RUN chmod +x /app/start_server.py
+RUN chmod +x /app/start_server.py /app/webui.py
 
-# Expose the API port
-EXPOSE 8000
+# Expose ports
+# 8000: API mode (start_server.py)
+# 8001: Web UI mode (webui.py)
+EXPOSE 8000 8001
+
+# Environment variable to choose server mode (api or webui)
+ENV SERVER_MODE=api
 
 # Set the default command to use our custom server
 # Override the entrypoint to run our script directly
 # Use the full path to python to avoid PATH issues
-ENTRYPOINT ["/usr/bin/python3", "/app/start_server.py"]
+# To use Web UI mode: docker run -e SERVER_MODE=webui ...
+ENTRYPOINT ["/bin/bash", "-c", "if [ \"$SERVER_MODE\" = \"webui\" ]; then /usr/bin/python3 /app/webui.py; else /usr/bin/python3 /app/start_server.py; fi"]

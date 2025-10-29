@@ -1,0 +1,32 @@
+# Remote OCR Client Configuration
+# Copy this file to remote_config.yaml and edit with your settings
+
+# Remote server URL
+# Examples:
+#   - With Nginx/HTTPS: https://your-domain.com
+#   - Direct access: http://SERVER_IP:8000
+#   - SSH tunnel: http://localhost:8000
+server_url: 'http://localhost:8000'
+
+# API key for authentication (optional)
+# Set this if your server requires API key authentication
+api_key: null
+
+# Request timeout in seconds
+# Increase this for large PDFs or slow connections
+timeout: 300
+
+# Output directory for OCR results
+# Results will be saved to this directory
+output_dir: 'ocr_results'
+
+# Default prompt to use for OCR processing
+# Common prompts:
+#   - Markdown conversion: '<image>\n<|grounding|>Convert the document to markdown.'
+#   - Plain OCR: '<image>\nFree OCR.'
+#   - Table extraction: '<image>\n<|grounding|>Extract all tables as markdown.'
+default_prompt: '<image>\n<|grounding|>Convert the document to markdown.'
+
+# Output file suffix
+# Processed files will be saved as: original_name{suffix}.md
+output_suffix: '-OCR'
