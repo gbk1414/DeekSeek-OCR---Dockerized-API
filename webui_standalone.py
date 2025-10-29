@@ -1,44 +1,43 @@
 #!/usr/bin/env python3
 """
-DeepSeek-OCR Web UI
-A simple web interface for batch OCR processing with file upload and ZIP download
+DeepSeek-OCR Standalone Web UI
+로컬 PC에서 실행하여 원격 DeepSeek-OCR API 서버를 브라우저로 사용
+
+Usage:
+    python webui_standalone.py
+    python webui_standalone.py --server http://your-server.com:8000
+    python webui_standalone.py --port 8080
 """
 
 import os
 import sys
-import io
-import shutil
-import asyncio
+import argparse
+import webbrowser
 import tempfile
-import zipfile
+import shutil
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+import requests
+import zipfile
 
-# Add DeepSeek-OCR to path
-sys.path.insert(0, '/app/DeepSeek-OCR-vllm')
+# 기본 설정
+DEFAULT_SERVER_URL = os.environ.get('DEEPSEEK_OCR_SERVER', 'http://localhost:8000')
+DEFAULT_PORT = 8080
 
-# Import from start_server
-from start_server import (
-    llm, sampling_params, initialize_model,
-    pdf_to_images_high_quality, process_single_image,
-    PROMPT
-)
-
-# Create FastAPI app
+# FastAPI 앱 초기화
 app = FastAPI(
-    title="DeepSeek-OCR Web UI",
-    description="Web interface for batch OCR processing",
+    title="DeepSeek-OCR Web UI (Standalone)",
+    description="Browser interface for DeepSeek-OCR API",
     version="1.0.0"
 )
 
-# Add CORS middleware
+# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -47,96 +46,102 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Storage for processing jobs
-UPLOAD_DIR = Path("/app/webui_uploads")
-RESULTS_DIR = Path("/app/webui_results")
-UPLOAD_DIR.mkdir(exist_ok=True)
-RESULTS_DIR.mkdir(exist_ok=True)
+# 전역 변수
+API_SERVER_URL = DEFAULT_SERVER_URL
+TEMP_DIR = Path(tempfile.gettempdir()) / "deepseek_ocr_webui"
+TEMP_DIR.mkdir(exist_ok=True)
 
-# Job tracking
+# 작업 추적
 processing_jobs = {}
 
 
 def cleanup_old_files():
-    """Clean up files older than 24 hours"""
+    """24시간 이상 된 임시 파일 삭제"""
     import time
     current_time = time.time()
-    max_age = 24 * 3600  # 24 hours
+    max_age = 24 * 3600
 
-    for directory in [UPLOAD_DIR, RESULTS_DIR]:
-        for item in directory.iterdir():
-            if item.is_file() or item.is_dir():
-                if current_time - item.stat().st_mtime > max_age:
-                    try:
-                        if item.is_dir():
-                            shutil.rmtree(item)
-                        else:
-                            item.unlink()
-                    except Exception:
-                        pass
+    if TEMP_DIR.exists():
+        for item in TEMP_DIR.iterdir():
+            if current_time - item.stat().st_mtime > max_age:
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                except Exception:
+                    pass
 
 
 async def process_files_batch(job_id: str, files: List[Path], custom_prompt: Optional[str] = None):
-    """Process multiple files and create a ZIP archive"""
+    """배치로 파일 처리하고 ZIP 생성"""
     try:
-        # Update job status
         processing_jobs[job_id]['status'] = 'processing'
         processing_jobs[job_id]['total'] = len(files)
         processing_jobs[job_id]['processed'] = 0
 
-        # Create results directory for this job
-        job_results_dir = RESULTS_DIR / job_id
-        job_results_dir.mkdir(exist_ok=True)
+        # 결과 저장 디렉토리
+        results_dir = TEMP_DIR / job_id
+        results_dir.mkdir(exist_ok=True)
 
-        use_prompt = custom_prompt if custom_prompt else PROMPT
-
-        # Process each file
+        # 각 파일 처리
         for idx, file_path in enumerate(files):
             try:
                 processing_jobs[job_id]['current_file'] = file_path.name
 
-                # Determine file type
+                # 파일 타입 확인
                 ext = file_path.suffix.lower()
 
+                # API 엔드포인트 선택
                 if ext == '.pdf':
-                    # Process PDF
-                    images = pdf_to_images_high_quality(file_path.read_bytes(), dpi=144)
+                    endpoint = f"{API_SERVER_URL}/ocr/pdf"
+                else:
+                    endpoint = f"{API_SERVER_URL}/ocr/image"
 
-                    markdown_content = ""
-                    for page_idx, image in enumerate(images):
-                        result = process_single_image(image, use_prompt)
-                        markdown_content += f"## Page {page_idx + 1}\n\n{result}\n\n<--- Page Split --->\n\n"
+                # API 요청
+                with open(file_path, 'rb') as f:
+                    files_data = {'file': (file_path.name, f, 'application/octet-stream')}
+                    data = {}
+                    if custom_prompt:
+                        data['prompt'] = custom_prompt
 
-                    # Save result
-                    output_file = job_results_dir / f"{file_path.stem}.md"
-                    with open(output_file, 'w', encoding='utf-8') as f:
-                        f.write(markdown_content.strip())
+                    response = requests.post(endpoint, files=files_data, data=data, timeout=300)
 
-                elif ext in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp']:
-                    # Process image
-                    from PIL import Image
-                    image = Image.open(file_path).convert('RGB')
-                    result = process_single_image(image, use_prompt)
+                if response.status_code == 200:
+                    result = response.json()
 
-                    # Save result
-                    output_file = job_results_dir / f"{file_path.stem}.md"
-                    with open(output_file, 'w', encoding='utf-8') as f:
-                        f.write(result)
+                    # 결과 저장
+                    output_file = results_dir / f"{file_path.stem}.md"
+
+                    # PDF는 여러 페이지 결과를 합침
+                    if 'results' in result:
+                        content = ""
+                        for page_result in result['results']:
+                            if page_result.get('result'):
+                                content += page_result['result'] + "\n\n<--- Page Split --->\n\n"
+                        with open(output_file, 'w', encoding='utf-8') as f:
+                            f.write(content.strip())
+                    # 이미지는 단일 결과
+                    elif 'result' in result:
+                        with open(output_file, 'w', encoding='utf-8') as f:
+                            f.write(result['result'])
+
+                    processing_jobs[job_id]['successful'] += 1
+                else:
+                    raise Exception(f"API error: {response.status_code} - {response.text}")
 
                 processing_jobs[job_id]['processed'] = idx + 1
-                processing_jobs[job_id]['successful'] += 1
 
             except Exception as e:
                 processing_jobs[job_id]['failed'] += 1
                 processing_jobs[job_id]['errors'].append(f"{file_path.name}: {str(e)}")
 
-        # Create ZIP file
-        zip_path = RESULTS_DIR / f"{job_id}.zip"
+        # ZIP 파일 생성
+        zip_path = TEMP_DIR / f"{job_id}.zip"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for md_file in job_results_dir.glob("*.md"):
+            for md_file in results_dir.glob("*.md"):
                 zipf.write(md_file, md_file.name)
 
-        # Update job status
         processing_jobs[job_id]['status'] = 'completed'
         processing_jobs[job_id]['zip_path'] = str(zip_path)
         processing_jobs[job_id]['completed_at'] = datetime.now().isoformat()
@@ -148,35 +153,33 @@ async def process_files_batch(job_id: str, files: List[Path], custom_prompt: Opt
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize the model on startup"""
-    initialize_model()
+    """시작 시 초기화"""
     cleanup_old_files()
+    print(f"\n{'='*70}")
+    print(f"  DeepSeek-OCR Web UI (Standalone)")
+    print(f"{'='*70}")
+    print(f"  Local URL:  http://localhost:{app.state.port}")
+    print(f"  API Server: {API_SERVER_URL}")
+    print(f"{'='*70}\n")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """Serve the main web UI"""
-    html_content = """
-<!DOCTYPE html>
+    """Web UI 페이지 제공"""
+    html_content = """<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DeepSeek-OCR Web UI</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
         }
-
         .container {
             max-width: 900px;
             margin: 0 auto;
@@ -185,27 +188,22 @@ async def root():
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             overflow: hidden;
         }
-
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 30px;
             text-align: center;
         }
-
-        .header h1 {
-            font-size: 2em;
-            margin-bottom: 10px;
+        .header h1 { font-size: 2em; margin-bottom: 10px; }
+        .header p { opacity: 0.9; font-size: 0.95em; }
+        .server-info {
+            background: rgba(255,255,255,0.2);
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 0.85em;
         }
-
-        .header p {
-            opacity: 0.9;
-        }
-
-        .content {
-            padding: 30px;
-        }
-
+        .content { padding: 30px; }
         .upload-area {
             border: 3px dashed #667eea;
             border-radius: 12px;
@@ -215,33 +213,11 @@ async def root():
             cursor: pointer;
             transition: all 0.3s ease;
         }
-
-        .upload-area:hover {
-            border-color: #764ba2;
-            background: #f0f1ff;
-        }
-
-        .upload-area.dragover {
-            border-color: #764ba2;
-            background: #e8e9ff;
-            transform: scale(1.02);
-        }
-
-        .upload-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-        }
-
-        input[type="file"] {
-            display: none;
-        }
-
-        .file-list {
-            margin-top: 20px;
-            max-height: 300px;
-            overflow-y: auto;
-        }
-
+        .upload-area:hover { border-color: #764ba2; background: #f0f1ff; }
+        .upload-area.dragover { border-color: #764ba2; background: #e8e9ff; transform: scale(1.02); }
+        .upload-icon { font-size: 64px; margin-bottom: 20px; }
+        input[type="file"] { display: none; }
+        .file-list { margin-top: 20px; max-height: 300px; overflow-y: auto; }
         .file-item {
             background: #f8f9fa;
             padding: 12px 16px;
@@ -251,20 +227,8 @@ async def root():
             justify-content: space-between;
             align-items: center;
         }
-
-        .file-item .name {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .file-item .size {
-            color: #6c757d;
-            font-size: 0.9em;
-            margin-left: 10px;
-        }
-
+        .file-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .file-item .size { color: #6c757d; font-size: 0.9em; margin-left: 10px; }
         .file-item .remove {
             background: #dc3545;
             color: white;
@@ -274,22 +238,9 @@ async def root():
             cursor: pointer;
             margin-left: 10px;
         }
-
-        .file-item .remove:hover {
-            background: #c82333;
-        }
-
-        .prompt-section {
-            margin-top: 30px;
-        }
-
-        .prompt-section label {
-            display: block;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: #333;
-        }
-
+        .file-item .remove:hover { background: #c82333; }
+        .prompt-section { margin-top: 30px; }
+        .prompt-section label { display: block; font-weight: 600; margin-bottom: 8px; color: #333; }
         .prompt-section textarea {
             width: 100%;
             padding: 12px;
@@ -299,18 +250,8 @@ async def root():
             font-size: 14px;
             resize: vertical;
         }
-
-        .prompt-section textarea:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .buttons {
-            margin-top: 30px;
-            display: flex;
-            gap: 12px;
-        }
-
+        .prompt-section textarea:focus { outline: none; border-color: #667eea; }
+        .buttons { margin-top: 30px; display: flex; gap: 12px; }
         button {
             flex: 1;
             padding: 14px 28px;
@@ -321,40 +262,19 @@ async def root():
             cursor: pointer;
             transition: all 0.3s ease;
         }
-
         .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
         }
-
         .btn-primary:hover:not(:disabled) {
             transform: translateY(-2px);
             box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
         }
-
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-        }
-
-        .btn-secondary:hover {
-            background: #5a6268;
-        }
-
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .progress-section {
-            margin-top: 30px;
-            display: none;
-        }
-
-        .progress-section.active {
-            display: block;
-        }
-
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-secondary:hover { background: #5a6268; }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .progress-section { margin-top: 30px; display: none; }
+        .progress-section.active { display: block; }
         .progress-bar {
             width: 100%;
             height: 30px;
@@ -363,7 +283,6 @@ async def root():
             overflow: hidden;
             margin-bottom: 16px;
         }
-
         .progress-fill {
             height: 100%;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -374,13 +293,7 @@ async def root():
             color: white;
             font-weight: 600;
         }
-
-        .status-text {
-            text-align: center;
-            color: #666;
-            margin-bottom: 16px;
-        }
-
+        .status-text { text-align: center; color: #666; margin-bottom: 16px; }
         .download-section {
             margin-top: 20px;
             padding: 20px;
@@ -389,12 +302,7 @@ async def root():
             border: 2px solid #c3e6cb;
             text-align: center;
         }
-
-        .download-section h3 {
-            color: #155724;
-            margin-bottom: 12px;
-        }
-
+        .download-section h3 { color: #155724; margin-bottom: 12px; }
         .download-btn {
             background: #28a745;
             color: white;
@@ -407,11 +315,7 @@ async def root():
             text-decoration: none;
             display: inline-block;
         }
-
-        .download-btn:hover {
-            background: #218838;
-        }
-
+        .download-btn:hover { background: #218838; }
         .error-section {
             margin-top: 20px;
             padding: 20px;
@@ -419,16 +323,8 @@ async def root():
             border-radius: 8px;
             border: 2px solid #f5c6cb;
         }
-
-        .error-section h4 {
-            color: #721c24;
-            margin-bottom: 12px;
-        }
-
-        .error-list {
-            color: #721c24;
-            font-size: 0.9em;
-        }
+        .error-section h4 { color: #721c24; margin-bottom: 12px; }
+        .error-list { color: #721c24; font-size: 0.9em; }
     </style>
 </head>
 <body>
@@ -436,8 +332,10 @@ async def root():
         <div class="header">
             <h1>🔍 DeepSeek-OCR Web UI</h1>
             <p>PDF 및 이미지 파일을 업로드하여 OCR 처리 후 결과를 ZIP으로 다운로드하세요</p>
+            <div class="server-info" id="serverInfo">
+                ⚙️ API 서버 연결 확인 중...
+            </div>
         </div>
-
         <div class="content">
             <div class="upload-area" id="uploadArea">
                 <div class="upload-icon">📁</div>
@@ -445,19 +343,15 @@ async def root():
                 <p>PDF, JPG, PNG 등의 파일을 지원합니다</p>
                 <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png,.bmp,.tiff,.webp">
             </div>
-
             <div class="file-list" id="fileList"></div>
-
             <div class="prompt-section">
                 <label for="promptInput">OCR 프롬프트 (선택사항)</label>
-                <textarea id="promptInput" rows="3" placeholder="기본값: <image>\n<|grounding|>Convert the document to markdown."></textarea>
+                <textarea id="promptInput" rows="3" placeholder="기본값: <image>\\n<|grounding|>Convert the document to markdown."></textarea>
             </div>
-
             <div class="buttons">
                 <button class="btn-primary" id="processBtn" onclick="processFiles()">OCR 처리 시작</button>
                 <button class="btn-secondary" id="clearBtn" onclick="clearFiles()">초기화</button>
             </div>
-
             <div class="progress-section" id="progressSection">
                 <div class="progress-bar">
                     <div class="progress-fill" id="progressFill" style="width: 0%">0%</div>
@@ -468,12 +362,10 @@ async def root():
             </div>
         </div>
     </div>
-
     <script>
         let selectedFiles = [];
         let jobId = null;
         let pollInterval = null;
-
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const fileList = document.getElementById('fileList');
@@ -483,28 +375,27 @@ async def root():
         const statusText = document.getElementById('statusText');
         const downloadSection = document.getElementById('downloadSection');
         const errorSection = document.getElementById('errorSection');
+        const serverInfo = document.getElementById('serverInfo');
 
-        // File upload handlers
+        // 서버 연결 확인
+        async function checkServerConnection() {
+            try {
+                const response = await fetch('/api/health');
+                const data = await response.json();
+                serverInfo.innerHTML = `✅ API 서버 연결됨: ${data.server_url}`;
+                serverInfo.style.background = 'rgba(76, 175, 80, 0.3)';
+            } catch (error) {
+                serverInfo.innerHTML = `❌ API 서버 연결 실패`;
+                serverInfo.style.background = 'rgba(244, 67, 54, 0.3)';
+            }
+        }
+        checkServerConnection();
+
         uploadArea.addEventListener('click', () => fileInput.click());
-
-        uploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
-
-        uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
-        });
-
-        uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            handleFiles(e.dataTransfer.files);
-        });
-
-        fileInput.addEventListener('change', (e) => {
-            handleFiles(e.target.files);
-        });
+        uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+        uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('dragover'); });
+        uploadArea.addEventListener('drop', (e) => { e.preventDefault(); uploadArea.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
+        fileInput.addEventListener('change', (e) => { handleFiles(e.target.files); });
 
         function handleFiles(files) {
             for (let file of files) {
@@ -555,32 +446,22 @@ async def root():
                 alert('파일을 선택해주세요');
                 return;
             }
-
-            // Prepare form data
             const formData = new FormData();
-            selectedFiles.forEach(file => {
-                formData.append('files', file);
-            });
-
+            selectedFiles.forEach(file => { formData.append('files', file); });
             const customPrompt = document.getElementById('promptInput').value.trim();
             if (customPrompt) {
                 formData.append('prompt', customPrompt);
             }
-
-            // Disable buttons
             processBtn.disabled = true;
             progressSection.classList.add('active');
             downloadSection.innerHTML = '';
             errorSection.innerHTML = '';
-
             try {
-                const response = await fetch('/webui/process', {
+                const response = await fetch('/api/process', {
                     method: 'POST',
                     body: formData
                 });
-
                 const result = await response.json();
-
                 if (result.job_id) {
                     jobId = result.job_id;
                     statusText.textContent = 'OCR 처리 중...';
@@ -588,7 +469,6 @@ async def root():
                 } else {
                     throw new Error('작업 ID를 받지 못했습니다');
                 }
-
             } catch (error) {
                 alert('오류 발생: ' + error.message);
                 processBtn.disabled = false;
@@ -602,29 +482,25 @@ async def root():
 
         async function checkJobStatus() {
             try {
-                const response = await fetch(`/webui/status/${jobId}`);
+                const response = await fetch(`/api/status/${jobId}`);
                 const status = await response.json();
-
                 if (status.status === 'processing') {
                     const progress = Math.round((status.processed / status.total) * 100);
                     progressFill.style.width = progress + '%';
                     progressFill.textContent = progress + '%';
                     statusText.textContent = `처리 중... (${status.processed}/${status.total}) - ${status.current_file}`;
-
                 } else if (status.status === 'completed') {
                     clearInterval(pollInterval);
                     progressFill.style.width = '100%';
                     progressFill.textContent = '100%';
                     statusText.textContent = '처리 완료!';
-
                     downloadSection.innerHTML = `
                         <div class="download-section">
                             <h3>✅ OCR 처리가 완료되었습니다!</h3>
                             <p>성공: ${status.successful} / 실패: ${status.failed}</p>
-                            <a href="/webui/download/${jobId}" class="download-btn" download>📥 결과 다운로드 (ZIP)</a>
+                            <a href="/api/download/${jobId}" class="download-btn" download>📥 결과 다운로드 (ZIP)</a>
                         </div>
                     `;
-
                     if (status.errors && status.errors.length > 0) {
                         errorSection.innerHTML = `
                             <div class="error-section">
@@ -635,9 +511,7 @@ async def root():
                             </div>
                         `;
                     }
-
                     processBtn.disabled = false;
-
                 } else if (status.status === 'failed') {
                     clearInterval(pollInterval);
                     statusText.textContent = '처리 실패';
@@ -649,7 +523,6 @@ async def root():
                     `;
                     processBtn.disabled = false;
                 }
-
             } catch (error) {
                 clearInterval(pollInterval);
                 alert('상태 확인 중 오류 발생: ' + error.message);
@@ -658,38 +531,49 @@ async def root():
         }
     </script>
 </body>
-</html>
-    """
+</html>"""
     return HTMLResponse(content=html_content)
 
 
-@app.post("/webui/process")
-async def webui_process(
+@app.get("/api/health")
+async def api_health():
+    """API 서버 연결 확인"""
+    try:
+        response = requests.get(f"{API_SERVER_URL}/health", timeout=5)
+        if response.status_code == 200:
+            return {"status": "connected", "server_url": API_SERVER_URL, "server_health": response.json()}
+        else:
+            return {"status": "error", "server_url": API_SERVER_URL, "error": f"Status {response.status_code}"}
+    except Exception as e:
+        return {"status": "error", "server_url": API_SERVER_URL, "error": str(e)}
+
+
+@app.post("/api/process")
+async def api_process(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     prompt: Optional[str] = Form(None)
 ):
-    """Process uploaded files"""
+    """파일 처리 시작"""
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    # Generate job ID
+    # 작업 ID 생성
     job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
-    # Create upload directory for this job
-    job_upload_dir = UPLOAD_DIR / job_id
-    job_upload_dir.mkdir(exist_ok=True)
+    # 임시 디렉토리에 파일 저장
+    job_dir = TEMP_DIR / job_id
+    job_dir.mkdir(exist_ok=True)
 
-    # Save uploaded files
     file_paths = []
     for file in files:
-        file_path = job_upload_dir / file.filename
+        file_path = job_dir / file.filename
         with open(file_path, 'wb') as f:
             content = await file.read()
             f.write(content)
         file_paths.append(file_path)
 
-    # Initialize job tracking
+    # 작업 추적 초기화
     processing_jobs[job_id] = {
         'status': 'queued',
         'total': len(file_paths),
@@ -701,24 +585,24 @@ async def webui_process(
         'created_at': datetime.now().isoformat()
     }
 
-    # Start background processing
+    # 백그라운드에서 처리 시작
     background_tasks.add_task(process_files_batch, job_id, file_paths, prompt)
 
     return {"job_id": job_id, "total_files": len(file_paths)}
 
 
-@app.get("/webui/status/{job_id}")
-async def webui_status(job_id: str):
-    """Get job status"""
+@app.get("/api/status/{job_id}")
+async def api_status(job_id: str):
+    """작업 상태 조회"""
     if job_id not in processing_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
     return processing_jobs[job_id]
 
 
-@app.get("/webui/download/{job_id}")
-async def webui_download(job_id: str):
-    """Download processed results as ZIP"""
+@app.get("/api/download/{job_id}")
+async def api_download(job_id: str):
+    """결과 ZIP 다운로드"""
     if job_id not in processing_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -737,12 +621,40 @@ async def webui_download(job_id: str):
     )
 
 
-if __name__ == "__main__":
-    print("Starting DeepSeek-OCR Web UI on port 8001...")
+def main():
+    """메인 함수"""
+    parser = argparse.ArgumentParser(description='DeepSeek-OCR Standalone Web UI')
+    parser.add_argument('--server', '-s', type=str, default=DEFAULT_SERVER_URL,
+                       help=f'DeepSeek-OCR API server URL (default: {DEFAULT_SERVER_URL})')
+    parser.add_argument('--port', '-p', type=int, default=DEFAULT_PORT,
+                       help=f'Local web UI port (default: {DEFAULT_PORT})')
+    parser.add_argument('--no-browser', action='store_true',
+                       help='Do not open browser automatically')
+
+    args = parser.parse_args()
+
+    # 전역 변수 설정
+    global API_SERVER_URL
+    API_SERVER_URL = args.server.rstrip('/')
+    app.state.port = args.port
+
+    # 브라우저 자동 열기
+    if not args.no_browser:
+        import threading
+        def open_browser():
+            import time
+            time.sleep(1.5)
+            webbrowser.open(f'http://localhost:{args.port}')
+        threading.Thread(target=open_browser, daemon=True).start()
+
+    # 서버 시작
     uvicorn.run(
-        "webui:app",
+        app,
         host="0.0.0.0",
-        port=8001,
-        reload=False,
-        workers=1
+        port=args.port,
+        log_level="info"
     )
+
+
+if __name__ == "__main__":
+    main()

@@ -122,22 +122,33 @@ curl -X POST "http://localhost:8000/ocr/batch" \
 
 ### Remote Server Usage
 
-For remote server deployment and client usage:
+Three ways to use remote server:
 
+**1. Web UI (Recommended for most users)**:
 ```bash
-# Create sample config file
+# Run standalone Web UI on local PC
+python webui_standalone.py --server https://your-server.com
+
+# Browser opens automatically at http://localhost:8080
+# Drag & drop files → Process → Download ZIP
+# See WEBUI_STANDALONE_GUIDE.md
+```
+
+**2. Command Line Client (For automation)**:
+```bash
+# Create config file
 python remote_ocr_client.py --create-config
 
-# Edit remote_config.yaml with your server URL
-# Then process files from local PC to remote server
-
-# Process single file
+# Process files
 python remote_ocr_client.py --server https://your-server.com --file document.pdf
-
-# Process folder
 python remote_ocr_client.py --server https://your-server.com --folder data/
 
-# See REMOTE_SERVER_GUIDE.md for detailed setup instructions
+# See REMOTE_SERVER_GUIDE.md
+```
+
+**3. Direct API Calls (For developers)**:
+```bash
+curl -X POST "https://your-server.com/ocr/pdf" -F "file=@document.pdf"
 ```
 
 ## Architecture Overview
@@ -357,8 +368,9 @@ python pdf_to_markdown_processor.py
 ```text
 .
 ├── custom_*.py                      # Custom patches (replace originals during build)
-├── start_server.py                  # FastAPI server entrypoint
-├── remote_ocr_client.py             # Remote server client for local usage
+├── start_server.py                  # FastAPI server entrypoint (API only)
+├── webui_standalone.py              # Standalone Web UI (run locally)
+├── remote_ocr_client.py             # Command-line client for remote usage
 ├── pdf_to_markdown_processor.py     # Basic markdown batch processor
 ├── pdf_to_markdown_processor_enhanced.py  # Enhanced with image extraction
 ├── pdf_to_ocr_enhanced.py           # Plain OCR batch processor
@@ -366,10 +378,11 @@ python pdf_to_markdown_processor.py
 ├── pdf_to_custom_prompt_enhanced.py # Custom prompt with enhancements
 ├── custom_prompt.yaml               # Custom prompt configuration
 ├── remote_config.yaml.example       # Sample remote client config
-├── Dockerfile                       # Container definition (applies custom files)
+├── Dockerfile                       # Container definition (API server)
 ├── docker-compose.yml               # Service configuration
 ├── build.bat                        # Windows build script
 ├── REMOTE_SERVER_GUIDE.md           # Remote server setup guide
+├── WEBUI_STANDALONE_GUIDE.md        # Web UI standalone usage guide
 ├── data/                            # PDF input/output directory
 │   └── images/                      # Extracted images (enhanced processors)
 └── models/                          # Model weights (mounted as volume)
