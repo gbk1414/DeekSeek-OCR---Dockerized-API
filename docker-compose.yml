@@ -10,8 +10,8 @@ services:
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - MODEL_PATH=/app/models/deepseek-ai/DeepSeek-OCR  # Update with your model path
-      - MAX_CONCURRENCY=5  # Adjust based on your GPU memory
-      - GPU_MEMORY_UTILIZATION=0.85  # Adjust based on your GPU memory
+      - MAX_CONCURRENCY=64  # vLLM 동시 처리 요청 수 (DeepSeek-OCR 공식 권장: 32-100, A100 기준: 64-128)
+      - GPU_MEMORY_UTILIZATION=0.92  # GPU 메모리 활용률 (공식 권장: 0.90-0.95)
     deploy:
       resources:
         reservations:
