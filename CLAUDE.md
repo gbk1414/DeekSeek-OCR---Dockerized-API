@@ -369,7 +369,9 @@ python pdf_to_markdown_processor.py
 .
 ├── custom_*.py                      # Custom patches (replace originals during build)
 ├── start_server.py                  # FastAPI server entrypoint (API only)
-├── webui_standalone.py              # Standalone Web UI (run locally)
+├── webui/
+│   ├── webui_standalone.py          # Standalone Web UI (run locally)
+│   └── WEBUI_STANDALONE_GUIDE.md    # Web UI standalone usage guide
 ├── remote_ocr_client.py             # Command-line client for remote usage
 ├── pdf_to_markdown_processor.py     # Basic markdown batch processor
 ├── pdf_to_markdown_processor_enhanced.py  # Enhanced with image extraction
@@ -382,7 +384,6 @@ python pdf_to_markdown_processor.py
 ├── docker-compose.yml               # Service configuration
 ├── build.bat                        # Windows build script
 ├── REMOTE_SERVER_GUIDE.md           # Remote server setup guide
-├── webui/WEBUI_STANDALONE_GUIDE.md        # Web UI standalone usage guide
 ├── data/                            # PDF input/output directory
 │   └── images/                      # Extracted images (enhanced processors)
 └── models/                          # Model weights (mounted as volume)
